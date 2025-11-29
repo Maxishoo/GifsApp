@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">GifsApp</string>
+    <string name="app_name">RectanglesApp</string>
+    <string name="Add_button">Add</string>
+    <string name="Remove_button">Remove</string>
 </resources>

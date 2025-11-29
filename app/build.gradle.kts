@@ -40,6 +40,8 @@ android {
 }
 
 dependencies {
+    implementation("io.coil-kt:coil-compose:2.5.0")
+    implementation("com.squareup.okhttp3:okhttp:4.11.0")
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

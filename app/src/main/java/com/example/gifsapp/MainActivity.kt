@@ -1,6 +1,7 @@
 package com.example.gifsapp
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -33,14 +34,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.integerResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import org.json.JSONArray
+import coil.compose.AsyncImage
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +65,13 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+data class CatImage(
+    val id: String,
+    val url: String,
+    val width: Int,
+    val height: Int
+)
+
 class MyViewModel : ViewModel() {
     var state by mutableStateOf(false)
         private set
@@ -59,7 +79,7 @@ class MyViewModel : ViewModel() {
     var last by mutableIntStateOf(0)
         private set
 
-    val elements = mutableStateListOf<Int>()
+    val elements = mutableStateListOf<CatImage>()
 
     fun toggleState(value: Int) {
         last = value
@@ -71,14 +91,52 @@ class MyViewModel : ViewModel() {
     }
 
     fun addElement() {
-        elements.add(elements.size)
+        viewModelScope.launch {
+            try {
+                val newCat = loadCatImage()
+                elements.add(newCat)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Log.e("CatAPI", "Ошибка загрузки котика", e)
+            }
+        }
     }
 
     fun removeElement() {
         elements.removeLastOrNull()
     }
-}
 
+    private suspend fun loadCatImage(): CatImage {
+        return withContext(Dispatchers.IO) {
+            val client = OkHttpClient()
+            val request = Request.Builder()
+                .url("https://api.thecatapi.com/v1/images/search")
+                .build()
+
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+
+            if (response.isSuccessful && !responseBody.isNullOrEmpty()) {
+                val jsonArray = JSONArray(responseBody)
+                val jsonObject = jsonArray.getJSONObject(0)
+                CatImage(
+                    id = jsonObject.getString("id"),
+                    url = jsonObject.getString("url"),
+                    width = jsonObject.getInt("width"),
+                    height = jsonObject.getInt("height")
+                )
+            } else {
+                CatImage(
+                    id = "error",
+                    url = "",
+                    width = 500,
+                    height = 500
+                )
+
+            }
+        }
+    }
+}
 
 @Composable
 fun MyScreen(viewModel: MyViewModel = viewModel()) {
@@ -94,13 +152,24 @@ fun MyScreen(viewModel: MyViewModel = viewModel()) {
                 .windowInsetsPadding(WindowInsets.statusBars)
                 .clickable { viewModel.hideOverlay() }
         ) {
+            if (last < elements.size) {
+                val cat = elements[last]
+                AsyncImage(
+                    model = cat.url,
+                    contentDescription = "Cat $last",
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .align(Alignment.Center),
+                    contentScale = ContentScale.Fit
+                )
+            }
             Text(
                 text = "$last",
                 modifier = Modifier
-                    .fillMaxSize()
-                    .align(Alignment.Center),
+                    .align(Alignment.TopStart)
+                    .padding(16.dp),
                 color = colorResource(R.color.main_text),
-                fontSize = 34.sp,
+                fontSize = 24.sp,
             )
         }
     } else {
@@ -124,10 +193,10 @@ fun MyScreen(viewModel: MyViewModel = viewModel()) {
             ) {
                 items(
                     items = elements,
-                    key = { it }
-                ) { value ->
-                    Square(value, {
-                        viewModel.toggleState(value)
+                    key = { it.id }
+                ) { cat ->
+                    CatSquare(cat, {
+                        viewModel.toggleState(elements.indexOf(cat))
                     })
                 }
 
@@ -182,23 +251,36 @@ private fun BottomButton(action: () -> Unit, text: String) {
 }
 
 @Composable
-private fun Square(
-    number: Int,
+private fun CatSquare(
+    cat: CatImage,
     action: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val col = if (number % 2 == 0) colorResource(R.color.red) else colorResource(R.color.blue)
     Box(
         modifier = modifier
             .aspectRatio(1f)
-            .background(col)
             .clickable { action() }
     ) {
+        AsyncImage(
+            model = cat.url,
+            contentDescription = "Cat ${cat.id}",
+            modifier = Modifier
+                .fillMaxSize()
+                .clip(RoundedCornerShape(8.dp)),
+            contentScale = ContentScale.Crop,
+            placeholder = painterResource(R.drawable.placeholder), // Добавьте placeholder в ресурсы
+            //error = painterResource(R.drawable.error) // Добавьте error изображение в ресурсы
+        )
+
+        // Показываем номер поверх изображения
         Text(
-            text = "$number",
-            color = colorResource(R.color.main_text),
-            fontSize = 34.sp,
-            modifier = Modifier.align(Alignment.Center)
+            text = "${cat.id.take(4)}", // Показываем первые 4 символа ID
+            color = Color.White,
+            fontSize = 12.sp,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .background(Color.Black.copy(alpha = 0.7f))
+                .padding(4.dp)
         )
     }
 }

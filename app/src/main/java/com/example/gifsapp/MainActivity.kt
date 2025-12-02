@@ -2,7 +2,7 @@ package com.example.gifsapp
 
 import android.content.Context
 import android.os.Bundle
-import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.res.stringResource
@@ -61,17 +62,21 @@ import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONArray
-import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
 import com.valentinilk.shimmer.ShimmerBounds
 import com.valentinilk.shimmer.rememberShimmer
 import com.valentinilk.shimmer.shimmer
+import kotlinx.coroutines.coroutineScope
 
+
+// таблица в бд
 @Entity(tableName = "cached_cat_images")
 data class CachedCatImage(
     @PrimaryKey val id: String,
@@ -80,6 +85,7 @@ data class CachedCatImage(
     val height: Int
 )
 
+// апи общения с бд Data access object
 @Dao
 interface CachedCatImageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -98,6 +104,7 @@ interface CachedCatImageDao {
     suspend fun clearAll()
 }
 
+// создаём бд
 @Database(
     entities = [CachedCatImage::class],
     version = 1,
@@ -124,12 +131,13 @@ abstract class AppDatabase : RoomDatabase() {
     }
 }
 
+// апи получения котиков по интернету
 class CatImageDataSource(
     private val client: OkHttpClient = OkHttpClient()
 ) {
-    fun fetchRandomCatImage(): CatImage {
+    suspend fun fetchRandomCatImage(): CatImage = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url("https://api.thecatapi.com/v1/images/search  ")
+            .url("https://api.thecatapi.com/v1/images/search")
             .build()
 
         val response = client.newCall(request).execute()
@@ -138,18 +146,19 @@ class CatImageDataSource(
         if (response.isSuccessful && !responseBody.isNullOrEmpty()) {
             val jsonArray = JSONArray(responseBody)
             val jsonObject = jsonArray.getJSONObject(0)
-            return CatImage(
+            CatImage(
                 id = jsonObject.getString("id"),
                 url = jsonObject.getString("url"),
                 width = jsonObject.getInt("width"),
                 height = jsonObject.getInt("height")
             )
         } else {
-            throw Exception("Не удалось загрузить изображение котика")
+            throw Exception("${response.code}")
         }
     }
 }
 
+// репозиторий котиков
 class CatImageRepository(
     private val dataSource: CatImageDataSource = CatImageDataSource(),
     private val cachedCatImageDao: CachedCatImageDao
@@ -157,7 +166,6 @@ class CatImageRepository(
     suspend fun getRandomCatImage(): CatImage {
         val remoteCat = dataSource.fetchRandomCatImage()
 
-        // Сохраняем в кэш
         cachedCatImageDao.insert(
             CachedCatImage(
                 id = remoteCat.id,
@@ -168,6 +176,15 @@ class CatImageRepository(
         )
 
         return remoteCat
+    }
+
+    suspend fun getRandomCatImages(count: Int): List<CatImage> {
+        return coroutineScope {
+            val deferredList = (1..count).map { _ ->
+                async { getRandomCatImage() }
+            }
+            deferredList.awaitAll()
+        }
     }
 
     suspend fun getCachedImages(): List<CatImage> {
@@ -186,6 +203,7 @@ class CatImageRepository(
     }
 }
 
+
 class MyViewModelFactory(
     private val repository: CatImageRepository
 ) : ViewModelProvider.Factory {
@@ -194,7 +212,7 @@ class MyViewModelFactory(
             @Suppress("UNCHECKED_CAST")
             return MyViewModel(repository) as T
         }
-        throw IllegalArgumentException("Unknown ViewModel class")
+        throw Exception()
     }
 }
 
@@ -224,6 +242,8 @@ enum class LoadingState {
     IDLE, LOADING, ERROR
 }
 
+
+// вью модель ддя управления данными для интерфейса
 class MyViewModel(
     private val repository: CatImageRepository
 ) : ViewModel() {
@@ -253,24 +273,12 @@ class MyViewModel(
 
         loadingState = LoadingState.LOADING
         viewModelScope.launch {
-            val newCats = mutableListOf<CatImage>()
-            repeat(12) { index ->
-                if (loadingState == LoadingState.LOADING) {
-                    try {
-                        val newCat = withContext(Dispatchers.IO) {
-                            repository.getRandomCatImage()
-                        }
-                        newCats.add(newCat)
-                    } catch (e: Exception) {
-                        Log.e("MyViewModel", "Failed to load cat image at index $index", e)
-                        loadingState = LoadingState.ERROR
-                        return@launch
-                    }
-                }
-            }
-            if (loadingState == LoadingState.LOADING) {
+            try {
+                val newCats = repository.getRandomCatImages(12)
                 elements.addAll(newCats)
                 loadingState = LoadingState.IDLE
+            } catch (_: Exception) {
+                loadingState = LoadingState.ERROR
             }
         }
     }
@@ -293,6 +301,7 @@ class MyViewModel(
     }
 }
 
+// интерфейс
 @Composable
 fun MyScreen(viewModel: MyViewModel = viewModel()) {
     val elements by viewModel::elements
@@ -312,23 +321,38 @@ fun MyScreen(viewModel: MyViewModel = viewModel()) {
         ) {
             if (last < elements.size) {
                 val cat = elements[last]
-                AsyncImage(
+
+                SubcomposeAsyncImage(
                     model = cat.url,
                     contentDescription = "Cat $last",
                     modifier = Modifier
                         .fillMaxSize()
                         .align(Alignment.Center),
-                    contentScale = ContentScale.Fit
+                    contentScale = ContentScale.Fit,
+                    loading = {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                color = colorResource(id = R.color.button)
+                            )
+                        }
+                    },
+                    error = {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = stringResource(R.string.ErrorLoadText),
+                                color = Color.Red,
+                                fontSize = 48.sp
+                            )
+                        }
+                    }
                 )
             }
-            Text(
-                text = "$last",
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(16.dp),
-                color = colorResource(R.color.main_text),
-                fontSize = 24.sp,
-            )
         }
     } else {
         Box(
@@ -372,9 +396,13 @@ fun MyScreen(viewModel: MyViewModel = viewModel()) {
                             items = elements,
                             key = { it.id }
                         ) { cat ->
-                            CatSquare(cat, {
-                                viewModel.toggleState(elements.indexOf(cat))
-                            })
+                            val index = elements.indexOf(cat)
+                            CatSquare(
+                                cat = cat,
+                                index = index,
+                                action = { viewModel.toggleState(index) },
+                                context = LocalContext.current
+                            )
                         }
 
                         if (loadingState == LoadingState.LOADING) {
@@ -406,9 +434,9 @@ fun MyScreen(viewModel: MyViewModel = viewModel()) {
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text("Ошибка загрузки", color = Color.Red)
+                                Text(stringResource(R.string.ErrorLoadText), color = Color.Red)
                                 Button(onClick = { viewModel.loadMoreCats() }) {
-                                    Text("Повторить")
+                                    Text(stringResource(R.string.Repeat))
                                 }
                             }
                         }
@@ -469,17 +497,20 @@ private fun BottomButton(action: () -> Unit, text: String) {
 @Composable
 private fun CatSquare(
     cat: CatImage,
+    index: Int,
     action: () -> Unit,
+    context: Context,
     modifier: Modifier = Modifier
 ) {
-    val shimmerInstance = rememberShimmer(
-        shimmerBounds = ShimmerBounds.View
-    )
+    val shimmerInstance = rememberShimmer(shimmerBounds = ShimmerBounds.View)
 
     Box(
         modifier = modifier
             .aspectRatio(1f)
-            .clickable { action() }
+            .clickable {
+                action()
+                Toast.makeText(context, index.toString(), Toast.LENGTH_SHORT).show()
+            }
     ) {
         SubcomposeAsyncImage(
             model = cat.url,

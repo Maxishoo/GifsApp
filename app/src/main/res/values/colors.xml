@@ -5,7 +5,7 @@
 
     <color name="red">#AAFF1313</color>
     <color name="blue">#AA1F8FFF</color>
-    <color name="green">#AA26B400</color>
+    <color name="green">#AA009E4D</color>
     <color name="background">#AAE2E2E2</color>
 
     <color name="even_rectangle">@color/red</color>

@@ -3,4 +3,7 @@
     <string name="Add_button">Add</string>
     <string name="Remove_button">Remove</string>
     <string name="Clear">Очистить</string>
+    <string name="Repeat">Повторить</string>
+    <string name="ErrorLoadText">Ошибка загрузки</string>
+    <string name="Api">https://api.thecatapi.com/v1/images/search</string>
 </resources>
